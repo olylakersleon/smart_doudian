@@ -1,0 +1,9 @@
+{
+  "pages": [
+    {"name": "经营总览", "path": "/ffa/morder/order/list", "priority": 1},
+    {"name": "商品分析", "path": "/ffa/g/list", "priority": 2},
+    {"name": "流量分析", "path": "/ffa/flow/list", "priority": 3},
+    {"name": "营销投放", "path": "/ffa/promotion/list", "priority": 4},
+    {"name": "竞品与行业", "path": "/ffa/industry/list", "priority": 5}
+  ]
+}
