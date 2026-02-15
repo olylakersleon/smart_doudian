@@ -165,3 +165,26 @@ python3 prototype/web_autoweb_bot.py \
 - 通用兜底：`aria-label` / `data-testid` / placeholder 模式
 
 建议在真实接入时优先给关键控件加 `data-testid`，可显著提升稳定性与可维护性。
+
+
+## 长任务代码生成与复用模块
+
+新增 `prototype/web_long_task_agent.py`，用于将用户一次“多页面长任务”指令编译成代码并缓存。
+
+能力：
+
+- 输入一条长任务对话需求（可包含“然后”串联）；
+- 自动生成任务计划并编译成 Python 代码 (`prototype/generated_tasks/task_<id>.py`)；
+- 同时落地任务元数据 (`task_<id>.json`)；
+- 后续收到相同指令 + 相同页面快照时直接命中缓存，不再重新推理。
+
+示例：
+
+```bash
+python3 prototype/web_long_task_agent.py \
+  --instruction '先筛选 2025-02-15 订单，然后查看订单号 ORDER_1001 详情' \
+  --snapshots prototype/order_page_snapshot_element_plus.json prototype/order_page_snapshot.json \
+  --dry-run
+```
+
+该模式适合交付“可自主执行的独立工作 Agent”，并将底层代码产物对客户透明化。

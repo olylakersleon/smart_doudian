@@ -95,3 +95,15 @@
 3. **多级回退策略**：角色selector -> 框架selector -> 通用selector。
 4. **意图置信度与计划置信度**：输出 `confidence`，便于上层决策是否二次确认。
 5. **DSL 与执行解耦**：先产出 WebDSL，再映射 ActionStep，便于替换执行器（Playwright/CDP）。
+
+
+## 11. 长任务编译缓存机制（新增）
+
+新增 LongTask Agent：
+
+- 将用户长任务对话请求解析为多步任务（跨多个页面快照）；
+- 生成可执行 Python 任务代码和元数据；
+- 以 `instruction + snapshots` 计算 fingerprint，命中时直接复用缓存代码；
+- 执行链路遵循 plan -> code -> execute，并输出每步执行结果。
+
+这可显著降低重复任务的推理成本，提升一次性通过率和响应速度。
