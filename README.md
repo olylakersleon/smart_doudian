@@ -188,3 +188,29 @@ python3 prototype/web_long_task_agent.py \
 ```
 
 该模式适合交付“可自主执行的独立工作 Agent”，并将底层代码产物对客户透明化。
+
+
+## Playwright 登录后等待用户请求的完整测试用例
+
+新增 `prototype/playwright_login_request_case.py`，流程如下：
+
+1. 打开网站并执行登录（账号、密码、登录按钮选择器可配置）；
+2. 登录成功后等待用户请求（交互输入 JSON）或读取 `--requests-file`；
+3. 按顺序执行请求并输出 JSON 结果。
+
+批处理示例：
+
+```bash
+python3 prototype/playwright_login_request_case.py \
+  --login-url 'https://your-login-page' \
+  --account 'your_account' \
+  --password 'your_password' \
+  --account-selector "input[name='username']" \
+  --password-selector "input[name='password']" \
+  --submit-selector "button[type='submit']" \
+  --login-success-selector '.dashboard' \
+  --requests-file prototype/playwright_requests_example.json \
+  --headless
+```
+
+支持请求类型：`goto` / `click` / `type` / `wait` / `extract_text` / `screenshot`。

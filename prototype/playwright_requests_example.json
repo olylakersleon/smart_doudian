@@ -1,0 +1,7 @@
+{
+  "requests": [
+    {"action": "goto", "url": "https://example.com"},
+    {"action": "extract_text", "selector": "h1"},
+    {"action": "screenshot", "path": "prototype/playwright_case_example.png"}
+  ]
+}
