@@ -123,3 +123,22 @@ python3 prototype/clawbot.py \
 ```
 
 开启后，报告中会增加“KDTS 元工具工厂输出”区块，展示自动生成工具的维度与自检样例。
+
+
+## 新增模块：AutoWeb 对话操作 Bot
+
+新增 `prototype/web_autoweb_bot.py`，用于：
+
+- 解析不同前端框架页面快照（AntD/Element/Layui/Generic）；
+- 将用户对话需求转成结构化 intent；
+- 基于 intent 自动规划页面操作步骤（如订单管理页“按订单号搜索并打开详情”）；
+- 支持 dry-run 执行日志，便于接入真实 Playwright 执行层。
+
+示例：
+
+```bash
+python3 prototype/web_autoweb_bot.py \
+  --snapshot prototype/order_page_snapshot.json \
+  --utterance '请在订单管理页查看订单号 ORDER_1001 的详情' \
+  --dry-run
+```
