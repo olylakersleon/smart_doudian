@@ -129,9 +129,10 @@ python3 prototype/clawbot.py \
 
 新增 `prototype/web_autoweb_bot.py`，用于：
 
-- 解析不同前端框架页面快照（AntD/Element/Layui/Generic）；
+- 解析不同前端框架页面快照（AntD/Element/Layui/Vuetify/Generic）；
 - 将用户对话需求转成结构化 intent；
-- 基于 intent 自动规划页面操作步骤（如订单管理页“按订单号搜索并打开详情”）；
+- 抽象标准 WebDSL（`set_text`/`click`/`pick_date`/`observe`）；
+- 通过框架适配层将 WebDSL 映射到不同组件实现（如 AntD/Element 的日期选择器）；
 - 支持 dry-run 执行日志，便于接入真实 Playwright 执行层。
 
 示例：
@@ -140,5 +141,15 @@ python3 prototype/clawbot.py \
 python3 prototype/web_autoweb_bot.py \
   --snapshot prototype/order_page_snapshot.json \
   --utterance '请在订单管理页查看订单号 ORDER_1001 的详情' \
+  --dry-run
+```
+
+
+日期筛选示例（Element Plus）：
+
+```bash
+python3 prototype/web_autoweb_bot.py \
+  --snapshot prototype/order_page_snapshot_element_plus.json \
+  --utterance '请筛选 2025-02-15 的订单' \
   --dry-run
 ```
