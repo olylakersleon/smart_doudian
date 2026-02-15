@@ -153,3 +153,15 @@ python3 prototype/web_autoweb_bot.py \
   --utterance '请筛选 2025-02-15 的订单' \
   --dry-run
 ```
+
+
+## WebDSL 适配策略（参考主流框架实践）
+
+本模块按主流框架组件约定做了 selector 与交互抽象：
+
+- Ant Design：`ant-picker-input`、`ant-picker-ok`、`ant-select-selector`
+- Element Plus：`el-date-editor`、`el-picker-panel__footer`、`el-select`
+- Layui：`lay-key`、`laydate-btns-confirm`、`layui-form-select`
+- 通用兜底：`aria-label` / `data-testid` / placeholder 模式
+
+建议在真实接入时优先给关键控件加 `data-testid`，可显著提升稳定性与可维护性。

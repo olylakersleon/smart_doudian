@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""AutoWeb Bot: framework-aware WebDSL for dialogue-driven web operations."""
+"""AutoWeb Bot: framework-adaptive WebDSL for dialogue-driven page operations.
+
+Design goals:
+- normalize operations into WebDSL actions (set_text/click/pick_date/select/observe)
+- adapt popular UI frameworks (Ant Design, Element Plus, Layui, Vuetify, generic)
+- improve action accuracy using selector candidate ranking + role fallback
+"""
 
 from __future__ import annotations
 
@@ -10,7 +16,7 @@ import re
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 
 @dataclass
@@ -34,6 +40,13 @@ class UserIntent:
     action: str
     target_page: str
     filters: Dict[str, str]
+    confidence: float = 0.7
+
+
+@dataclass
+class WebDSLAction:
+    name: str
+    args: Dict[str, str]
 
 
 @dataclass
@@ -42,12 +55,6 @@ class ActionStep:
     selector: str
     value: str = ""
     desc: str = ""
-
-
-@dataclass
-class WebDSLAction:
-    name: str
-    args: Dict[str, str]
 
 
 class LLMClient:
@@ -74,7 +81,7 @@ class LLMClient:
         payload = {
             "model": self.model,
             "messages": [
-                {"role": "system", "content": "You are a web automation DSL planner."},
+                {"role": "system", "content": "You are a web automation planner."},
                 {"role": "user", "content": prompt},
             ],
             "temperature": 0.2,
@@ -115,8 +122,6 @@ class FrameworkDetector:
             return "layui"
         if "v-btn" in text or "v-text-field" in text:
             return "vuetify"
-        if "mui-" in text:
-            return "mui"
         return "generic"
 
 
@@ -141,9 +146,9 @@ class IntentParser:
     def parse(self, utterance: str) -> UserIntent:
         if self.llm.enabled():
             prompt = (
-                "将用户操作需求解析为JSON，字段 action,target_page,filters。"
-                "action 可选：view_order/filter_order/open_order_detail/filter_by_date。"
-                f"用户输入：{utterance}"
+                "将用户网页操作需求解析成JSON: action,target_page,filters,confidence(0~1)。"
+                "action可选:view_order/filter_order/open_order_detail/filter_by_date/filter_by_status。"
+                f"用户输入:{utterance}"
             )
             try:
                 text = self.llm.ask(prompt)
@@ -154,91 +159,112 @@ class IntentParser:
                         action=str(data.get("action", "view_order")),
                         target_page=str(data.get("target_page", "订单管理")),
                         filters={str(k): str(v) for k, v in dict(data.get("filters", {})).items()},
+                        confidence=float(data.get("confidence", 0.8)),
                     )
             except Exception:
                 pass
 
-        filters: Dict[str, str] = {}
         action = "view_order"
+        filters: Dict[str, str] = {}
+        conf = 0.75
+
         if "详情" in utterance:
             action = "open_order_detail"
+            conf += 0.05
         if "筛选" in utterance or "过滤" in utterance:
             action = "filter_order"
-        if "日期" in utterance or "时间" in utterance:
-            action = "filter_by_date"
-
         m_order = re.search(r"(订单号|order)\s*[:：]?\s*([A-Za-z0-9_-]+)", utterance)
         if m_order:
             filters["order_id"] = m_order.group(2)
+            conf += 0.1
 
         m_date = re.search(r"(\d{4}-\d{2}-\d{2})", utterance)
         if m_date:
             filters["date"] = m_date.group(1)
             action = "filter_by_date"
+            conf += 0.1
 
-        return UserIntent(action=action, target_page="订单管理", filters=filters)
+        m_status = re.search(r"(待发货|待付款|已完成|已取消)", utterance)
+        if m_status:
+            filters["status"] = m_status.group(1)
+            action = "filter_by_status"
+            conf += 0.08
+
+        return UserIntent(action=action, target_page="订单管理", filters=filters, confidence=min(conf, 0.98))
 
 
 class UIFwkSupport:
-    """Framework component adapters for standardized WebDSL actions."""
+    """Component interaction best-practice adapter.
 
-    def selectors(self, page: WebPageModel) -> Dict[str, str]:
-        by_role = {e.role: e.selector for e in page.elements}
-        base = {
-            "search_input": by_role.get("search_input", "input[placeholder*='订单']"),
-            "search_button": by_role.get("search_button", "button:has-text('搜索')"),
-            "order_row": by_role.get("order_row", "table tr:nth-child(1)"),
-            "detail_button": by_role.get("detail_button", "button:has-text('详情')"),
-            "date_input": by_role.get("date_input", "input[placeholder*='日期']"),
-            "date_confirm": by_role.get("date_confirm", "button:has-text('确定')"),
+    Best-practice notes:
+    - Prefer explicit role-provided selector first.
+    - Then fallback to framework-common stable selectors.
+    - Then fallback to generic ARIA/data-testid selectors.
+    """
+
+    def _framework_candidates(self, framework: str) -> Dict[str, List[str]]:
+        generic = {
+            "search_input": ["input[placeholder*='订单']", "input[aria-label*='订单']", "[data-testid='order-search-input']"],
+            "search_button": ["button:has-text('搜索')", "button[aria-label='search']", "[data-testid='order-search-btn']"],
+            "order_row": ["table tr:nth-child(1)", "[data-testid='order-row-0']"],
+            "detail_button": ["button:has-text('详情')", "[data-testid='order-detail-btn']"],
+            "date_input": ["input[placeholder*='日期']", "input[aria-label*='date']", "[data-testid='date-input']"],
+            "date_confirm": ["button:has-text('确定')", "button:has-text('OK')", "[data-testid='date-confirm']"],
+            "status_select": ["[data-testid='order-status-select']", "select[name='status']"],
         }
-
-        framework = page.framework
         if framework == "antd":
-            base["date_input"] = by_role.get("date_input", ".ant-picker input")
-            base["date_confirm"] = by_role.get("date_confirm", ".ant-picker-ok button")
+            generic["date_input"] = [".ant-picker-input input", ".ant-picker input"] + generic["date_input"]
+            generic["date_confirm"] = [".ant-picker-ok .ant-btn-primary", ".ant-picker-ok button"] + generic["date_confirm"]
+            generic["status_select"] = [".ant-select-selector", "#order-status"] + generic["status_select"]
         elif framework == "element-plus":
-            base["date_input"] = by_role.get("date_input", ".el-date-editor input")
-            base["date_confirm"] = by_role.get("date_confirm", ".el-picker-panel__footer .el-button--primary")
+            generic["date_input"] = [".el-date-editor .el-input__inner", ".el-date-editor input"] + generic["date_input"]
+            generic["date_confirm"] = [".el-picker-panel__footer .el-button--primary"] + generic["date_confirm"]
+            generic["status_select"] = [".el-select .el-input__inner", "#order-status"] + generic["status_select"]
         elif framework == "layui":
-            base["date_input"] = by_role.get("date_input", "input[lay-key]")
-            base["date_confirm"] = by_role.get("date_confirm", ".laydate-btns-confirm")
-        return base
+            generic["date_input"] = ["input[lay-key]", ".layui-input"] + generic["date_input"]
+            generic["date_confirm"] = [".laydate-btns-confirm"] + generic["date_confirm"]
+            generic["status_select"] = [".layui-form-select"] + generic["status_select"]
+        return generic
 
-    def date_pick_steps(self, framework: str, selectors: Dict[str, str], date_value: str) -> List[ActionStep]:
-        if framework == "antd":
-            return [
-                ActionStep("click", selectors["date_input"], desc="打开 AntD 日期面板"),
-                ActionStep("type", selectors["date_input"], value=date_value, desc="输入日期"),
-                ActionStep("click", selectors["date_confirm"], desc="确认日期"),
-            ]
-        if framework == "element-plus":
-            return [
-                ActionStep("click", selectors["date_input"], desc="打开 Element 日期面板"),
-                ActionStep("type", selectors["date_input"], value=date_value, desc="输入日期"),
-                ActionStep("click", selectors["date_confirm"], desc="确认日期"),
-            ]
-        if framework == "layui":
-            return [
-                ActionStep("click", selectors["date_input"], desc="打开 Layui 日期面板"),
-                ActionStep("type", selectors["date_input"], value=date_value, desc="输入日期"),
-                ActionStep("click", selectors["date_confirm"], desc="确认日期"),
-            ]
-        return [ActionStep("type", selectors["date_input"], value=date_value, desc="通用日期输入")]
+    def resolve(self, page: WebPageModel) -> Dict[str, str]:
+        by_role = {x.role: x.selector for x in page.elements}
+        known_selectors = {x.selector for x in page.elements}
+        cands = self._framework_candidates(page.framework)
+        resolved: Dict[str, str] = {}
+        for role, options in cands.items():
+            if role in by_role:
+                resolved[role] = by_role[role]
+                continue
+            hit = next((s for s in options if s in known_selectors), None)
+            resolved[role] = hit or options[0]
+        return resolved
+
+    def date_steps(self, framework: str, selectors: Dict[str, str], date_val: str) -> List[ActionStep]:
+        return [
+            ActionStep("click", selectors["date_input"], desc=f"打开{framework}日期控件"),
+            ActionStep("type", selectors["date_input"], value=date_val, desc="输入日期"),
+            ActionStep("click", selectors["date_confirm"], desc="确认日期"),
+        ]
 
 
 class WebDSLPlanner:
-    def to_dsl(self, intent: UserIntent) -> List[WebDSLAction]:
+    def from_intent(self, intent: UserIntent) -> List[WebDSLAction]:
         dsl: List[WebDSLAction] = []
         if "order_id" in intent.filters:
-            dsl.append(WebDSLAction("set_text", {"target": "search_input", "value": intent.filters["order_id"]}))
-            dsl.append(WebDSLAction("click", {"target": "search_button"}))
+            dsl += [
+                WebDSLAction("set_text", {"target": "search_input", "value": intent.filters["order_id"]}),
+                WebDSLAction("click", {"target": "search_button"}),
+            ]
         if intent.action == "open_order_detail":
-            dsl.append(WebDSLAction("click", {"target": "order_row"}))
-            dsl.append(WebDSLAction("click", {"target": "detail_button"}))
+            dsl += [WebDSLAction("click", {"target": "order_row"}), WebDSLAction("click", {"target": "detail_button"})]
         if intent.action == "filter_by_date" and "date" in intent.filters:
-            dsl.append(WebDSLAction("pick_date", {"target": "date_input", "value": intent.filters["date"]}))
-            dsl.append(WebDSLAction("click", {"target": "search_button"}))
+            dsl += [WebDSLAction("pick_date", {"target": "date_input", "value": intent.filters["date"]})]
+            dsl += [WebDSLAction("click", {"target": "search_button"})]
+        if intent.action == "filter_by_status" and "status" in intent.filters:
+            dsl += [
+                WebDSLAction("set_text", {"target": "status_select", "value": intent.filters["status"]}),
+                WebDSLAction("click", {"target": "search_button"}),
+            ]
         if not dsl:
             dsl.append(WebDSLAction("observe", {"target": "order_row"}))
         return dsl
@@ -247,23 +273,24 @@ class WebDSLPlanner:
 class ActionPlanner:
     def __init__(self) -> None:
         self.fwk = UIFwkSupport()
-        self.dsl_planner = WebDSLPlanner()
+        self.dsl = WebDSLPlanner()
 
-    def plan(self, page: WebPageModel, intent: UserIntent) -> List[ActionStep]:
-        sel = self.fwk.selectors(page)
-        dsl = self.dsl_planner.to_dsl(intent)
+    def plan(self, page: WebPageModel, intent: UserIntent) -> Tuple[List[ActionStep], float]:
+        selectors = self.fwk.resolve(page)
+        dsl_actions = self.dsl.from_intent(intent)
         steps: List[ActionStep] = []
-        for action in dsl:
+        for action in dsl_actions:
             target = action.args.get("target", "")
             if action.name == "set_text":
-                steps.append(ActionStep("type", sel[target], action.args.get("value", ""), f"输入 {target}"))
+                steps.append(ActionStep("type", selectors[target], action.args.get("value", ""), f"输入 {target}"))
             elif action.name == "click":
-                steps.append(ActionStep("click", sel[target], desc=f"点击 {target}"))
+                steps.append(ActionStep("click", selectors[target], desc=f"点击 {target}"))
             elif action.name == "pick_date":
-                steps.extend(self.fwk.date_pick_steps(page.framework, sel, action.args.get("value", "")))
+                steps.extend(self.fwk.date_steps(page.framework, selectors, action.args.get("value", "")))
             elif action.name == "observe":
-                steps.append(ActionStep("observe", sel.get(target, target), desc="观察目标区域"))
-        return steps
+                steps.append(ActionStep("observe", selectors.get(target, target), desc="观察目标区域"))
+        confidence = min(0.99, 0.6 + 0.05 * len(steps) + 0.2 * intent.confidence)
+        return steps, confidence
 
 
 class ActionExecutor:
@@ -271,11 +298,11 @@ class ActionExecutor:
         self.dry_run = dry_run
 
     def execute(self, steps: List[ActionStep]) -> List[str]:
-        out: List[str] = []
+        logs: List[str] = []
+        mode = "dry-run" if self.dry_run else "exec"
         for i, step in enumerate(steps, start=1):
-            prefix = "dry-run" if self.dry_run else "exec"
-            out.append(f"[{prefix}#{i}] {step.op} {step.selector} value={step.value} desc={step.desc}")
-        return out
+            logs.append(f"[{mode}#{i}] {step.op} {step.selector} value={step.value} desc={step.desc}")
+        return logs
 
 
 class AutoWebConversationBot:
@@ -288,27 +315,28 @@ class AutoWebConversationBot:
     def run(self, snapshot_file: Path, utterance: str) -> Dict[str, object]:
         page = self.page_parser.parse(snapshot_file)
         intent = self.intent_parser.parse(utterance)
-        steps = self.planner.plan(page, intent)
+        steps, score = self.planner.plan(page, intent)
         logs = self.executor.execute(steps)
         return {
             "page": page.page_name,
             "framework": page.framework,
             "intent": intent.__dict__,
-            "steps": [x.__dict__ for x in steps],
+            "plan_confidence": round(score, 3),
+            "steps": [s.__dict__ for s in steps],
             "logs": logs,
         }
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Run AutoWeb conversation module")
-    p.add_argument("--snapshot", default="prototype/order_page_snapshot.json")
-    p.add_argument("--utterance", required=True)
-    p.add_argument("--llm-provider", default="none", choices=["none", "openai", "gemini"])
-    p.add_argument("--llm-model", default="gpt-4o-mini")
-    p.add_argument("--llm-endpoint", default="https://api.openai.com/v1/chat/completions")
-    p.add_argument("--llm-api-key", default="")
-    p.add_argument("--dry-run", action="store_true")
-    return p.parse_args()
+    parser = argparse.ArgumentParser(description="Run AutoWeb conversation bot")
+    parser.add_argument("--snapshot", default="prototype/order_page_snapshot.json")
+    parser.add_argument("--utterance", required=True)
+    parser.add_argument("--llm-provider", default="none", choices=["none", "openai", "gemini"])
+    parser.add_argument("--llm-model", default="gpt-4o-mini")
+    parser.add_argument("--llm-endpoint", default="https://api.openai.com/v1/chat/completions")
+    parser.add_argument("--llm-api-key", default="")
+    parser.add_argument("--dry-run", action="store_true")
+    return parser.parse_args()
 
 
 def main() -> None:
