@@ -945,6 +945,7 @@ class ClawBotOrchestrator:
             self._render_report(
                 ts, merchant, market, page_signals, score, risks + tool_findings, final_recs, llm_result, tool_results, kdts_spec
             ),
+            self._render_report(ts, merchant, market, page_signals, score, risks + tool_findings, final_recs, llm_result, tool_results),
             encoding="utf-8",
         )
         print(f"[ClawBot] Report generated: {report_file}")
