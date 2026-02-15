@@ -67,6 +67,25 @@ class ToolResult:
     recommendations: List[str]
 
 
+@dataclass
+class DiagnosticDimension:
+    name: str
+    metric: str
+    criteria: str
+    root_causes: List[str]
+    advices: List[str]
+
+
+@dataclass
+class GeneratedToolSpec:
+    tool_name: str
+    domain: str
+    question: str
+    dimensions: List[DiagnosticDimension]
+    strategy_map: Dict[str, str]
+    self_test_cases: List[Dict[str, str]]
+
+
 class Storage:
     def __init__(self, db_path: Path) -> None:
         self.conn = sqlite3.connect(db_path)
@@ -654,6 +673,154 @@ class ToolOrchestrator:
         return [tool.run(merchant, market, page_signals, question, llm_analyzer) for tool in self.tools]
 
 
+
+
+class RuntimeGeneratedDiagnosticTool(BaseDiagnosisTool):
+    def __init__(self, spec: GeneratedToolSpec) -> None:
+        self.spec = spec
+        self.name = spec.tool_name
+
+    def run(
+        self,
+        merchant: MerchantSnapshot,
+        market: MarketSnapshot,
+        page_signals: List[CrawlPageSignal],
+        question: str,
+        llm_analyzer: LLMAnalyzerAgent,
+    ) -> ToolResult:
+        metric_context = {
+            "gmv": merchant.gmv,
+            "traffic": merchant.traffic,
+            "conversion_rate": merchant.conversion_rate,
+            "refund_rate": merchant.refund_rate,
+            "ad_roi": merchant.ad_roi,
+            "industry_gmv_trend": market.industry_gmv_trend,
+            "competitor_price_index": market.competitor_price_index,
+            "competitor_content_freq": market.competitor_content_freq,
+        }
+        findings: List[str] = []
+        recommendations: List[str] = []
+
+        for dim in self.spec.dimensions:
+            strategy = self.spec.strategy_map.get(dim.name, "deterministic")
+            metric_value = metric_context.get(dim.metric)
+            if strategy == "deterministic":
+                if metric_value is not None:
+                    findings.append(f"{dim.name}: {dim.metric}={metric_value}, 标准={dim.criteria}")
+                if dim.root_causes:
+                    findings.append(f"{dim.name}根因: {dim.root_causes[0]}")
+                if dim.advices:
+                    recommendations.append(f"{dim.name}: {dim.advices[0]}")
+            else:
+                semantic_hint = self._semantic_check(dim, metric_context, llm_analyzer)
+                findings.append(f"{dim.name}(语义): {semantic_hint}")
+                if dim.advices:
+                    recommendations.append(f"{dim.name}: {dim.advices[0]}")
+
+        return ToolResult(
+            tool_name=self.name,
+            summary=f"KDTS 生成工具执行完成({self.spec.domain})",
+            findings=findings[:6] or ["未发现异常"],
+            recommendations=recommendations[:6] or ["维持当前策略并观察"],
+        )
+
+    def _semantic_check(self, dim: DiagnosticDimension, metric_context: Dict[str, float], llm_analyzer: LLMAnalyzerAgent) -> str:
+        if llm_analyzer.provider == "none" or not llm_analyzer.api_key:
+            return "未配置LLM，已回退为规则摘要"
+        prompt = (
+            "你是抖店经营诊断助手。请判断该维度是否存在风险，输出一句话结论。\n"
+            f"维度: {dim.name}\n"
+            f"标准: {dim.criteria}\n"
+            f"指标上下文: {json.dumps(metric_context, ensure_ascii=False)}"
+        )
+        try:
+            resp = llm_analyzer._call_provider(prompt)
+            return resp.splitlines()[0].strip() if resp.strip() else "语义判定无返回"
+        except Exception as exc:
+            return f"语义判定失败: {exc}"
+
+
+class KDTSMetaToolFactory:
+    """Knowledge-Driven Tool Synthesis (KDTS):
+    1) knowledge crystallization
+    2) strategy mapping
+    3) tool synthesis
+    4) self-reflection
+    """
+
+    def __init__(self, llm_analyzer: LLMAnalyzerAgent) -> None:
+        self.llm_analyzer = llm_analyzer
+
+    def build(self, domain: str, question: str) -> GeneratedToolSpec:
+        dims = self._knowledge_crystallization(domain, question)
+        strategy_map = self._strategy_mapping(dims)
+        self_tests = self._self_reflection(dims, strategy_map)
+        tool_name = f"kdts_{domain.lower().replace(' ', '_')}_tool"
+        return GeneratedToolSpec(
+            tool_name=tool_name,
+            domain=domain,
+            question=question,
+            dimensions=dims,
+            strategy_map=strategy_map,
+            self_test_cases=self_tests,
+        )
+
+    def _knowledge_crystallization(self, domain: str, question: str) -> List[DiagnosticDimension]:
+        if self.llm_analyzer.provider != "none" and self.llm_analyzer.api_key:
+            prompt = (
+                f"作为一个{domain}专家，请列出分析该问题最核心的5个诊断维度，并输出JSON数组。"
+                "每项包含 name, metric, criteria, root_causes(list), advices(list)。"
+                f"问题: {question}"
+            )
+            try:
+                raw = self.llm_analyzer._call_provider(prompt)
+                data = json.loads(self.llm_analyzer._extract_json(raw))
+                if isinstance(data, list) and data:
+                    dims: List[DiagnosticDimension] = []
+                    for item in data[:6]:
+                        dims.append(
+                            DiagnosticDimension(
+                                name=str(item.get("name", "未知维度")),
+                                metric=str(item.get("metric", "conversion_rate")),
+                                criteria=str(item.get("criteria", "需优于行业中位")),
+                                root_causes=[str(x) for x in item.get("root_causes", [])][:3],
+                                advices=[str(x) for x in item.get("advices", [])][:3],
+                            )
+                        )
+                    if dims:
+                        return dims
+            except Exception:
+                pass
+
+        return [
+            DiagnosticDimension("流量质量", "traffic", ">=3000 且来源稳定", ["自然流量不足", "内容吸引力弱"], ["增加高点击素材测试"]),
+            DiagnosticDimension("转化效率", "conversion_rate", ">=2.5%", ["详情页说服不足", "价格策略不佳"], ["优化主图与首屏卖点"]),
+            DiagnosticDimension("退款健康", "refund_rate", "<=10%", ["商品预期差", "履约时效不稳"], ["按SKU拆解退款原因并治理"]),
+            DiagnosticDimension("投放产出", "ad_roi", ">=1.8", ["词包泛化", "人群不精准"], ["重建人群包并清理低效词"]),
+            DiagnosticDimension("竞品压力", "competitor_price_index", ">=0.95", ["价格带被压制", "活动节奏落后"], ["采用组合装和促销节奏对齐"]),
+        ]
+
+    @staticmethod
+    def _strategy_mapping(dims: List[DiagnosticDimension]) -> Dict[str, str]:
+        semantic_metrics = {"content_quality", "copy_quality", "service_experience"}
+        mapping: Dict[str, str] = {}
+        for d in dims:
+            mapping[d.name] = "semantic" if d.metric in semantic_metrics else "deterministic"
+        return mapping
+
+    @staticmethod
+    def _self_reflection(dims: List[DiagnosticDimension], strategy_map: Dict[str, str]) -> List[Dict[str, str]]:
+        cases = []
+        for d in dims[:3]:
+            cases.append(
+                {
+                    "dimension": d.name,
+                    "strategy": strategy_map.get(d.name, "deterministic"),
+                    "expected": "tool should return finding and recommendation",
+                }
+            )
+        return cases
+
 class AutoRunDecisionAgent:
     """Dynamically decide whether to trigger a diagnosis run."""
 
@@ -713,6 +880,8 @@ class ClawBotOrchestrator:
         llm_analyzer: LLMAnalyzerAgent,
         tool_orchestrator: ToolOrchestrator,
         focus_question: str,
+        kdts_domain: str,
+        enable_kdts_factory: bool,
         knowledge_dir: Path,
         report_dir: Path,
     ) -> None:
@@ -721,6 +890,9 @@ class ClawBotOrchestrator:
         self.llm_analyzer = llm_analyzer
         self.tool_orchestrator = tool_orchestrator
         self.focus_question = focus_question
+        self.kdts_domain = kdts_domain
+        self.enable_kdts_factory = enable_kdts_factory
+        self.kdts_factory = KDTSMetaToolFactory(llm_analyzer)
         self.merchant_agent = MerchantDataAgent()
         self.market_agent = MarketCompetitorAgent()
         self.learning_agent = KnowledgeLearningAgent(knowledge_dir)
@@ -746,6 +918,20 @@ class ClawBotOrchestrator:
             question=self.focus_question,
             llm_analyzer=self.llm_analyzer,
         )
+
+        kdts_spec: Optional[GeneratedToolSpec] = None
+        if self.enable_kdts_factory and self.focus_question.strip():
+            kdts_spec = self.kdts_factory.build(self.kdts_domain, self.focus_question)
+            kdts_tool = RuntimeGeneratedDiagnosticTool(kdts_spec)
+            tool_results.append(
+                kdts_tool.run(
+                    merchant=merchant,
+                    market=market,
+                    page_signals=page_signals,
+                    question=self.focus_question,
+                    llm_analyzer=self.llm_analyzer,
+                )
+            )
         tool_findings = [f"{t.tool_name}: {f}" for t in tool_results for f in t.findings[:2]]
         tool_recommendations = [f"{t.tool_name}: {r}" for t in tool_results for r in t.recommendations[:2]]
 
@@ -756,6 +942,9 @@ class ClawBotOrchestrator:
 
         report_file = self.report_dir / f"diagnosis_{dt.datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
         report_file.write_text(
+            self._render_report(
+                ts, merchant, market, page_signals, score, risks + tool_findings, final_recs, llm_result, tool_results, kdts_spec
+            ),
             self._render_report(ts, merchant, market, page_signals, score, risks + tool_findings, final_recs, llm_result, tool_results),
             encoding="utf-8",
         )
@@ -772,6 +961,7 @@ class ClawBotOrchestrator:
         recommendations: List[str],
         llm_result: LLMAnalysisResult,
         tool_results: List[ToolResult],
+        kdts_spec: Optional[GeneratedToolSpec],
     ) -> str:
         visited = "\n".join(f"- {x.page_name} ({x.page_path}) 指标: {json.dumps(x.metrics, ensure_ascii=False)}" for x in page_signals)
         risks_md = "\n".join(f"- {x}" for x in risks)
@@ -780,6 +970,15 @@ class ClawBotOrchestrator:
             f"- [{t.tool_name}] {t.summary} | 发现: {'；'.join(t.findings[:2])} | 建议: {'；'.join(t.recommendations[:2])}"
             for t in tool_results
         )
+        kdts_md = "未启用KDTS元工具工厂"
+        if kdts_spec is not None:
+            kdts_md = (
+                f"工具名: {kdts_spec.tool_name}\n"
+                f"- 域: {kdts_spec.domain}\n"
+                f"- 问题: {kdts_spec.question}\n"
+                f"- 维度数: {len(kdts_spec.dimensions)}\n"
+                f"- 自检样例: {json.dumps(kdts_spec.self_test_cases, ensure_ascii=False)}"
+            )
         return f"""# ClawBot 诊断报告 ({ts})
 
 ## Agent 调度访问页面
@@ -802,6 +1001,9 @@ class ClawBotOrchestrator:
 
 ## 规则诊断风险
 {risks_md}
+
+## KDTS 元工具工厂输出
+{kdts_md}
 
 ## 工具化诊断结果
 {tools_md}
@@ -863,6 +1065,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-interval-minutes", type=int, default=240)
     parser.add_argument("--volatility-threshold", type=float, default=12.0)
     parser.add_argument("--focus-question", default="", help="具体经营问题，用于问题知识检索工具")
+    parser.add_argument("--enable-kdts-factory", action="store_true", help="启用KDTS元工具自动生成")
+    parser.add_argument("--kdts-domain", default="抖店经营分析", help="KDTS知识结晶领域")
     return parser.parse_args()
 
 
@@ -894,6 +1098,8 @@ async def main() -> None:
         llm_analyzer,
         tool_orchestrator,
         args.focus_question,
+        args.kdts_domain,
+        args.enable_kdts_factory,
         Path(args.knowledge_dir),
         Path(args.report_dir),
     )

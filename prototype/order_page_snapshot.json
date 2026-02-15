@@ -1,0 +1,15 @@
+{
+  "page_name": "订单管理",
+  "url": "https://fxg.jinritemai.com/order/list",
+  "framework": "antd",
+  "raw_html": "<div class='ant-table'><div class='ant-picker'><input/></div><div class='ant-select-selector'></div><input class='ant-input' placeholder='请输入订单号'/><button class='ant-btn'>搜索</button><table><tr><td>ORDER_1001</td><td><button>详情</button></td></tr></table></div>",
+  "elements": [
+    {"name": "订单号输入框", "selector": "input[placeholder*='订单号']", "role": "search_input", "text": ""},
+    {"name": "日期输入", "selector": ".ant-picker-input input", "role": "date_input", "text": ""},
+    {"name": "日期确认", "selector": ".ant-picker-ok .ant-btn-primary", "role": "date_confirm", "text": "确定"},
+    {"name": "状态下拉", "selector": ".ant-select-selector", "role": "status_select", "text": ""},
+    {"name": "搜索按钮", "selector": "button:has-text('搜索')", "role": "search_button", "text": "搜索"},
+    {"name": "订单列表首行", "selector": "table tr:nth-child(1)", "role": "order_row", "text": "ORDER_1001"},
+    {"name": "详情按钮", "selector": "button:has-text('详情')", "role": "detail_button", "text": "详情"}
+  ]
+}

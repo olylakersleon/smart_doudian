@@ -100,3 +100,117 @@ python3 prototype/clawbot.py \
   --llm-provider openai \
   --focus-question '如何提升女装类目活动期转化率并控制退款率？'
 ```
+
+
+## KDTS 元工具工厂（Knowledge-Driven Tool Synthesis）
+
+新增 `KDTSMetaToolFactory`，支持四阶段自动生成诊断 tool：
+
+1. 知识结晶（Knowledge Crystallization）
+2. 策略映射（Strategy Mapping）
+3. 工具合成（Tool Synthesis）
+4. 自检封装（Self-Reflection）
+
+启用方式：
+
+```bash
+python3 prototype/clawbot.py \
+  --mode once \
+  --crawl-mode doushop-mock \
+  --focus-question '活动期如何提升转化并控制退款？' \
+  --enable-kdts-factory \
+  --kdts-domain '抖店经营诊断'
+```
+
+开启后，报告中会增加“KDTS 元工具工厂输出”区块，展示自动生成工具的维度与自检样例。
+
+
+## 新增模块：AutoWeb 对话操作 Bot
+
+新增 `prototype/web_autoweb_bot.py`，用于：
+
+- 解析不同前端框架页面快照（AntD/Element/Layui/Vuetify/Generic）；
+- 将用户对话需求转成结构化 intent；
+- 抽象标准 WebDSL（`set_text`/`click`/`pick_date`/`observe`）；
+- 通过框架适配层将 WebDSL 映射到不同组件实现（如 AntD/Element 的日期选择器）；
+- 支持 dry-run 执行日志，便于接入真实 Playwright 执行层。
+
+示例：
+
+```bash
+python3 prototype/web_autoweb_bot.py \
+  --snapshot prototype/order_page_snapshot.json \
+  --utterance '请在订单管理页查看订单号 ORDER_1001 的详情' \
+  --dry-run
+```
+
+
+日期筛选示例（Element Plus）：
+
+```bash
+python3 prototype/web_autoweb_bot.py \
+  --snapshot prototype/order_page_snapshot_element_plus.json \
+  --utterance '请筛选 2025-02-15 的订单' \
+  --dry-run
+```
+
+
+## WebDSL 适配策略（参考主流框架实践）
+
+本模块按主流框架组件约定做了 selector 与交互抽象：
+
+- Ant Design：`ant-picker-input`、`ant-picker-ok`、`ant-select-selector`
+- Element Plus：`el-date-editor`、`el-picker-panel__footer`、`el-select`
+- Layui：`lay-key`、`laydate-btns-confirm`、`layui-form-select`
+- 通用兜底：`aria-label` / `data-testid` / placeholder 模式
+
+建议在真实接入时优先给关键控件加 `data-testid`，可显著提升稳定性与可维护性。
+
+
+## 长任务代码生成与复用模块
+
+新增 `prototype/web_long_task_agent.py`，用于将用户一次“多页面长任务”指令编译成代码并缓存。
+
+能力：
+
+- 输入一条长任务对话需求（可包含“然后”串联）；
+- 自动生成任务计划并编译成 Python 代码 (`prototype/generated_tasks/task_<id>.py`)；
+- 同时落地任务元数据 (`task_<id>.json`)；
+- 后续收到相同指令 + 相同页面快照时直接命中缓存，不再重新推理。
+
+示例：
+
+```bash
+python3 prototype/web_long_task_agent.py \
+  --instruction '先筛选 2025-02-15 订单，然后查看订单号 ORDER_1001 详情' \
+  --snapshots prototype/order_page_snapshot_element_plus.json prototype/order_page_snapshot.json \
+  --dry-run
+```
+
+该模式适合交付“可自主执行的独立工作 Agent”，并将底层代码产物对客户透明化。
+
+
+## Playwright 登录后等待用户请求的完整测试用例
+
+新增 `prototype/playwright_login_request_case.py`，流程如下：
+
+1. 打开网站并执行登录（账号、密码、登录按钮选择器可配置）；
+2. 登录成功后等待用户请求（交互输入 JSON）或读取 `--requests-file`；
+3. 按顺序执行请求并输出 JSON 结果。
+
+批处理示例：
+
+```bash
+python3 prototype/playwright_login_request_case.py \
+  --login-url 'https://your-login-page' \
+  --account 'your_account' \
+  --password 'your_password' \
+  --account-selector "input[name='username']" \
+  --password-selector "input[name='password']" \
+  --submit-selector "button[type='submit']" \
+  --login-success-selector '.dashboard' \
+  --requests-file prototype/playwright_requests_example.json \
+  --headless
+```
+
+支持请求类型：`goto` / `click` / `type` / `wait` / `extract_text` / `screenshot`。
